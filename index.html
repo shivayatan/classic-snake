@@ -20,7 +20,7 @@
     <canvas id="game" width="400" height="400"></canvas>
     <div class="instructions">
         Arrow Keys / WASD to move • Space to pause • R to restart<br>
-        Eat red food to grow!
+        Eat <span style="color:#ff4757">red</span> fruit (+1) or <span style="color:#ffd700">gold</span> bonus fruit (+2 + ripples!)
     </div>
     <button onclick="startGame()">Start Game</button>
 
@@ -30,115 +30,231 @@ const ctx = canvas.getContext('2d');
 const gridSize = 20;
 const tileCount = 20;
 
-let snake = [{x:10,y:10}];
-let vx=1, vy=0;
-let food = {x:15,y:15};
-let score=0;
-let interval=null;
-let running=false;
-let paused=false;
+let snake = [];
+let vx = 1, vy = 0;
+let food = {x: 15, y: 15};
+let bonusFood = null;           // {x, y} or null
+let score = 0;
+let interval = null;
+let running = false;
+let paused = false;
+let ripples = [];               // ripple effects
 
+// --- Drawing ---
 function draw() {
-  ctx.fillStyle='#16213e'; ctx.fillRect(0,0,400,400);
-  ctx.fillStyle='#00ff9f';
-  snake.forEach(s => ctx.fillRect(s.x*gridSize, s.y*gridSize, gridSize-2, gridSize-2));
-  ctx.fillStyle='#ff4757';
-  ctx.fillRect(food.x*gridSize, food.y*gridSize, gridSize-2, gridSize-2);
+  ctx.fillStyle = '#16213e';
+  ctx.fillRect(0, 0, 400, 400);
+
+  // Draw snake
+  ctx.fillStyle = '#00ff9f';
+  for (let i = 0; i < snake.length; i++) {
+    ctx.fillRect(snake[i].x * gridSize, snake[i].y * gridSize, gridSize - 2, gridSize - 2);
+  }
+
+  // Normal food (red)
+  ctx.fillStyle = '#ff4757';
+  ctx.fillRect(food.x * gridSize, food.y * gridSize, gridSize - 2, gridSize - 2);
+
+  // Bonus food (gold)
+  if (bonusFood) {
+    ctx.fillStyle = '#ffd700';
+    ctx.fillRect(bonusFood.x * gridSize + 2, bonusFood.y * gridSize + 2, gridSize - 6, gridSize - 6);
+    // Shine effect
+    ctx.fillStyle = '#fff8dc';
+    ctx.fillRect(bonusFood.x * gridSize + 5, bonusFood.y * gridSize + 5, 4, 4);
+  }
+
+  // Draw ripples (explosion effect)
+  for (let i = 0; i < ripples.length; i++) {
+    const r = ripples[i];
+    ctx.strokeStyle = `rgba(255, 215, 0, ${r.alpha})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // inner ripple
+    ctx.strokeStyle = `rgba(255, 255, 200, ${r.alpha * 0.6})`;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, r.radius * 0.6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 }
 
-function update() {
-  if(!running || paused) return;
+function updateRipples() {
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i];
+    r.radius += 5;           // expand ~1cm over time
+    r.alpha -= 0.12;
+    if (r.alpha <= 0.05) {
+      ripples.splice(i, 1);
+    }
+  }
+}
 
-  const head = {x: snake[0].x + vx, y: snake[0].y + vy};
+// --- Game Logic ---
+function update() {
+  if (!running || paused) return;
+
+  // Calculate new head
+  const newHead = { x: snake[0].x + vx, y: snake[0].y + vy };
 
   // Wall collision
-  if(head.x<0 || head.x>=tileCount || head.y<0 || head.y>=tileCount) {
+  if (newHead.x < 0 || newHead.x >= tileCount || newHead.y < 0 || newHead.y >= tileCount) {
     return endGame();
   }
 
-  // Self collision fix: ignore the tail if we're not eating
-  const willEat = (head.x === food.x && head.y === food.y);
-  const bodyToCheck = willEat ? snake : snake.slice(0, -1);
+  // Add head temporarily
+  snake.unshift(newHead);
 
-  if(bodyToCheck.some(s => s.x === head.x && s.y === head.y)) {
+  // Self collision check (skip index 0 which is the new head)
+  let collided = false;
+  for (let i = 1; i < snake.length; i++) {
+    if (snake[i].x === newHead.x && snake[i].y === newHead.y) {
+      collided = true;
+      break;
+    }
+  }
+
+  if (collided) {
+    snake.shift(); // remove temporary head
     return endGame();
   }
 
-  snake.unshift(head);
+  // Check normal food
+  let ateNormal = (newHead.x === food.x && newHead.y === food.y);
+  let ateBonus = false;
 
-  if(willEat) {
+  if (bonusFood && newHead.x === bonusFood.x && newHead.y === bonusFood.y) {
+    ateBonus = true;
+    // Trigger ripple explosion at center of bonus fruit
+    const cx = bonusFood.x * gridSize + gridSize / 2;
+    const cy = bonusFood.y * gridSize + gridSize / 2;
+    ripples.push({ x: cx, y: cy, radius: 8, alpha: 0.9 });
+    bonusFood = null;
+  }
+
+  if (ateNormal) {
     score++;
     document.getElementById('score').innerText = score;
+    placeFood();
+  } else if (ateBonus) {
+    score += 2;
+    document.getElementById('score').innerText = score;
+    // Grow by 2: add one extra segment
+    const extra = { x: snake[snake.length-1].x, y: snake[snake.length-1].y };
+    snake.push(extra);
     placeFood();
   } else {
     snake.pop();
   }
 
+  updateRipples();
   draw();
 }
 
-function placeFood(){
+function placeFood() {
+  // Place normal red food
   do {
-    food = {x: Math.floor(Math.random()*tileCount), y: Math.floor(Math.random()*tileCount)};
-  } while(snake.some(s => s.x===food.x && s.y===food.y));
+    food = {
+      x: Math.floor(Math.random() * tileCount),
+      y: Math.floor(Math.random() * tileCount)
+    };
+  } while (
+    snake.some(s => s.x === food.x && s.y === food.y) ||
+    (bonusFood && bonusFood.x === food.x && bonusFood.y === food.y)
+  );
+
+  // Random chance to spawn bonus gold fruit (about 18% chance)
+  if (!bonusFood && Math.random() < 0.18) {
+    let attempts = 0;
+    do {
+      bonusFood = {
+        x: Math.floor(Math.random() * tileCount),
+        y: Math.floor(Math.random() * tileCount)
+      };
+      attempts++;
+    } while (
+      (bonusFood.x === food.x && bonusFood.y === food.y) &&
+      attempts < 10
+    );
+
+    // If bonus spawns on snake, cancel it
+    if (snake.some(s => s.x === bonusFood.x && s.y === bonusFood.y)) {
+      bonusFood = null;
+    }
+  }
 }
 
-function endGame(){
-  running=false;
+function endGame() {
+  running = false;
   clearInterval(interval);
-  ctx.fillStyle='rgba(0,0,0,0.75)';
-  ctx.fillRect(0,0,400,400);
-  ctx.fillStyle='#fff';
-  ctx.font='28px system-ui';
-  ctx.textAlign='center';
-  ctx.fillText('Game Over',200,170);
-  ctx.font='18px system-ui';
-  ctx.fillText('Score: '+score,200,210);
-  ctx.font='14px system-ui';
-  ctx.fillText('Press R to restart',200,250);
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, 0, 400, 400);
+  ctx.fillStyle = '#fff';
+  ctx.font = '28px system-ui';
+  ctx.textAlign = 'center';
+  ctx.fillText('Game Over', 200, 170);
+  ctx.font = '18px system-ui';
+  ctx.fillText('Score: ' + score, 200, 210);
+  ctx.font = '14px system-ui';
+  ctx.fillText('Press R to restart', 200, 250);
 }
 
-function startGame(){
+function startGame() {
   clearInterval(interval);
-  snake=[{x:10,y:10}];
-  vx=1; vy=0;
-  score=0;
-  document.getElementById('score').innerText='0';
+  snake = [{ x: 10, y: 10 }];
+  vx = 1;
+  vy = 0;
+  score = 0;
+  document.getElementById('score').innerText = '0';
+  food = { x: 15, y: 15 };
+  bonusFood = null;
+  ripples = [];
+  running = true;
+  paused = false;
   placeFood();
-  running=true;
-  paused=false;
   draw();
   interval = setInterval(update, 140);
 }
 
-function togglePause(){
-  if(!running) return;
+function togglePause() {
+  if (!running) return;
   paused = !paused;
-  if(!paused) {
+  if (!paused) {
     interval = setInterval(update, 140);
   } else {
     clearInterval(interval);
   }
 }
 
+// Keyboard controls
 document.addEventListener('keydown', e => {
-  if(!running) return;
+  if (!running) return;
   const k = e.key.toLowerCase();
 
-  if(k === ' '){ e.preventDefault(); togglePause(); return; }
-  if(k === 'r' && !running){ startGame(); return; }
+  if (k === ' ') {
+    e.preventDefault();
+    togglePause();
+    return;
+  }
+  if (k === 'r' && !running) {
+    startGame();
+    return;
+  }
 
-  if((k==='arrowup' || k==='w') && vy !== 1){ vx=0; vy=-1; }
-  else if((k==='arrowdown' || k==='s') && vy !== -1){ vx=0; vy=1; }
-  else if((k==='arrowleft' || k==='a') && vx !== 1){ vx=-1; vy=0; }
-  else if((k==='arrowright' || k==='d') && vx !== -1){ vx=1; vy=0; }
+  if ((k === 'arrowup' || k === 'w') && vy !== 1) { vx = 0; vy = -1; }
+  else if ((k === 'arrowdown' || k === 's') && vy !== -1) { vx = 0; vy = 1; }
+  else if ((k === 'arrowleft' || k === 'a') && vx !== 1) { vx = -1; vy = 0; }
+  else if ((k === 'arrowright' || k === 'd') && vx !== -1) { vx = 1; vy = 0; }
 });
 
+// Initial screen
 draw();
-ctx.fillStyle='#aaa';
-ctx.font='18px system-ui';
-ctx.textAlign='center';
-ctx.fillText('Click Start to Play',200,200);
+ctx.fillStyle = '#aaa';
+ctx.font = '18px system-ui';
+ctx.textAlign = 'center';
+ctx.fillText('Click Start to Play', 200, 200);
 </script>
 </body>
 </html>
